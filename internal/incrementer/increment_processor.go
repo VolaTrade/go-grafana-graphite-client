@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -99,14 +98,10 @@ func (ic *incrementProcessor) dispatchIncrementsToGrafana() {
 	request := ic.defaultRequest.Clone(context.Background())
 	request.Body = ioutil.NopCloser(bytes.NewBuffer(mdArrBytes))
 
-	resp, err := ic.client.Do(request)
+	_, err = ic.client.Do(request)
 	if err != nil {
 		println(err.Error())
 		return
 	}
-	buf := make([]byte, 4096)
-	n, err := resp.Body.Read(buf)
-	fmt.Println(resp.StatusCode, resp.Status)
-	fmt.Println(string(buf[:n]))
 	return
 }

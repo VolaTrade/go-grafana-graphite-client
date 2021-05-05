@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"net/http"
 	"sync"
@@ -82,7 +81,6 @@ func (c *conveyor) dispatchMetricsToGrafanaCloud() {
 	if len(c.mdArray) == 0 {
 		return
 	}
-	println("Dispatch triggered")
 	c.arrayMux.Lock()
 	mdArrBytes, err := json.Marshal(c.mdArray)
 	if err != nil {
@@ -95,14 +93,10 @@ func (c *conveyor) dispatchMetricsToGrafanaCloud() {
 	request := c.defRequest.Clone(context.Background())
 	request.Body = ioutil.NopCloser(bytes.NewBuffer(mdArrBytes))
 
-	resp, err := c.client.Do(request)
+	_, err = c.client.Do(request)
 	if err != nil {
 		println(err.Error())
 		return
 	}
-	buf := make([]byte, 4096)
-	n, err := resp.Body.Read(buf)
-	fmt.Println(resp.StatusCode, resp.Status)
-	fmt.Println(string(buf[:n]))
 	return
 }
