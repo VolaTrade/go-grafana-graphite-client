@@ -15,30 +15,35 @@ import (
 )
 
 type conveyor struct {
-	ctx        context.Context
-	client     http.Client
-	defRequest http.Request
-	mdArray    commons.MetricDataSlice
-	arrayMux   sync.Mutex
+	ctx           context.Context
+	client        http.Client
+	defRequest    http.Request
+	mdArray       commons.MetricDataSlice
+	metricChannel chan *commons.MetricData
+	arrayMux      sync.Mutex
 }
 
-func NewConveyor(ctx context.Context, grafanaUrl string, apiKey string, requestTimeout time.Duration) (*conveyor, error) {
+func NewConveyor(ctx context.Context, grafanaUrl string,
+	apiKey string, requestTimeout time.Duration, mc chan *commons.MetricData) (*conveyor, error) {
 
 	req, err := commons.GetDefaultRequest(grafanaUrl, apiKey)
 	if err != nil {
 		return nil, err
 	}
+	c := &conveyor{
+		ctx:           ctx,
+		client:        http.Client{Timeout: requestTimeout},
+		defRequest:    *req,
+		mdArray:       commons.MetricDataSlice{},
+		metricChannel: mc,
+		arrayMux:      sync.Mutex{},
+	}
 
-	return &conveyor{
-		ctx:        ctx,
-		client:     http.Client{Timeout: requestTimeout},
-		defRequest: *req,
-		mdArray:    commons.MetricDataSlice{},
-		arrayMux:   sync.Mutex{},
-	}, nil
+	go c.runTransportRoutine()
+	return c, nil
 }
 
-func (c *conveyor) RunTransportRoutine(conveyorChannel chan *commons.MetricData, incrementChannel chan *commons.MetricData) {
+func (c *conveyor) runTransportRoutine() {
 
 	for {
 		select {
@@ -46,37 +51,15 @@ func (c *conveyor) RunTransportRoutine(conveyorChannel chan *commons.MetricData,
 		case <-c.ctx.Done():
 			log.Println("[GO-STATSD] received kill signal from context in transport routine")
 
-		case md := <-conveyorChannel:
-			switch md.Mtype {
-
-			case commons.Counter:
-				incrementChannel <- md
-			default:
-				c.arrayMux.Lock()
-				c.mdArray = append(c.mdArray, md)
-				c.arrayMux.Unlock()
-			}
+		case md := <-c.metricChannel:
+			c.arrayMux.Lock()
+			c.mdArray = append(c.mdArray, md)
+			c.arrayMux.Unlock()
 		}
 	}
 }
 
-func (c *conveyor) RunMetricsRoutine(dispatchInterval time.Duration) {
-	ticker := time.NewTicker(dispatchInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-
-		case <-c.ctx.Done():
-			log.Println("[GO-STATSD] received kill signal from context in dispatch routine")
-
-		case <-ticker.C:
-			c.dispatchMetricsToGrafanaCloud()
-		}
-	}
-}
-
-func (c *conveyor) dispatchMetricsToGrafanaCloud() {
+func (c *conveyor) DispatchMetricsToGrafanaCloud() {
 
 	if len(c.mdArray) == 0 {
 		return
@@ -96,7 +79,5 @@ func (c *conveyor) dispatchMetricsToGrafanaCloud() {
 	_, err = c.client.Do(request)
 	if err != nil {
 		println(err.Error())
-		return
 	}
-	return
 }

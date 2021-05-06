@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"time"
 
 	stats "github.com/volatrade/go-grafana-graphite-client"
@@ -9,13 +10,10 @@ import (
 func main() {
 
 	cfg := &stats.Config{
-		ConveyorCount:  1,
-		FlushTime:      200,
-		Url:            "SHEESH",
-		ApiKey:         "KEY",
-		Env:            "dev_env",
-		Service:        "fake_test_service",
-		RequestTimeout: 3,
+		Url:     "https://graphite-us-central1.grafana.net/metrics",
+		ApiKey:  os.Getenv("GRAPHITE_API_KEY"),
+		Env:     "test_me",
+		Service: "fake_test_service",
 	}
 	statz, close, err := stats.NewClient(cfg)
 
@@ -25,8 +23,11 @@ func main() {
 	}
 
 	for {
-		statz.Increment("bleh", 1.0)
+		println("Starting increment")
+		for i := 0; i < 10; i++ {
+			statz.Increment("bug", 1.0)
+		}
 		time.Sleep(time.Duration(100) * time.Millisecond)
-		statz.Increment("bleh", 1.0)
+
 	}
 }
