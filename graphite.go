@@ -18,86 +18,72 @@ type (
 		Gauge(string, float64)
 	}
 	Config struct {
-		ConveyorCount  int
-		FlushTime      int
-		Url            string
-		ApiKey         string
-		Env            string
-		Service        string
-		RequestTimeout int
+		Url     string
+		ApiKey  string
+		Env     string
+		Service string
 	}
 	GraphiteClient struct {
-		ctx             context.Context
-		config          *Config
-		prefix          string
-		conveyorChannel chan *commons.MetricData
+		conveyorChannel   chan *commons.MetricData
+		incrementsChannel chan *commons.MetricData
+		config            *Config
+		ctx               context.Context
+		flushInterval     time.Duration
+		prefix            string
+		requestTimeout    time.Duration
 	}
 )
 
-func NewClient(cfg *Config) (Stats, func(), error) {
+//NewClient returns a graphite client interface
+func NewClient(cfg *Config, opts ...Option) (Stats, func(), error) {
 
-	if cfg.FlushTime < 0 {
-		return nil, func() {}, errors.New("flush time should be >= 0")
-	}
-	if cfg.ConveyorCount <= 0 {
-		return nil, func() {}, errors.New("conveyor count should be >= 0")
+	if cfg == nil {
+		return nil, func() {}, errors.New("Config should not be nil")
 	}
 	if !strings.Contains(cfg.Url, "http") && !strings.Contains(cfg.Url, "https") {
 		return nil, func() {}, errors.New("Unsupported protocol provided in URL")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	incChan := make(chan *commons.MetricData)
+
+	incChan, convChan := make(chan *commons.MetricData), make(chan *commons.MetricData)
 
 	client := GraphiteClient{
-		ctx:             ctx,
-		config:          cfg,
-		conveyorChannel: make(chan *commons.MetricData),
-		prefix:          strings.ToLower(fmt.Sprintf("%s.%s", cfg.Env, cfg.Service)),
+		ctx:               ctx,
+		config:            cfg,
+		conveyorChannel:   convChan,
+		incrementsChannel: incChan,
+		flushInterval:     time.Duration(800) * time.Millisecond,
+		prefix:            strings.ToLower(fmt.Sprintf("%s.%s", cfg.Env, cfg.Service)),
+		requestTimeout:    time.Duration(3) * time.Second,
+	}
+
+	for _, opt := range opts {
+		opt(client)
 	}
 
 	end := func() {
 		cancel()
-		close(client.conveyorChannel)
+		close(convChan)
 		close(incChan)
 	}
 
-	incProcessor, err := incrementer.NewIncrementsProcessor(ctx, cfg.Url,
-		cfg.ApiKey, time.Duration(cfg.RequestTimeout)*time.Second)
-
+	ip, err := incrementer.NewIncrementsProcessor(ctx, cfg.Url, cfg.ApiKey, client.requestTimeout, incChan)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	c, err := conveyor.NewConveyor(ctx, cfg.Url, cfg.ApiKey, client.requestTimeout, convChan)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	go commons.RunPoller(ctx, client.flushInterval, c.DispatchMetricsToGrafanaCloud, ip.GraphiteDispatchRoutine)
 	if err != nil {
 		return nil, end, err
 	}
-
-	for i := 0; i < cfg.ConveyorCount; i++ {
-		launchConveyor(ctx, cfg.Url, cfg.ApiKey,
-			cfg.RequestTimeout, cfg.FlushTime, client.conveyorChannel, incChan)
-	}
-
-	go incProcessor.ProcessIncrements(incChan)
-	go incProcessor.RunIncrementTransportRoutine(time.Duration(cfg.FlushTime) * time.Millisecond)
-
 	return &client, end, nil
 }
 
-func launchConveyor(ctx context.Context, url string,
-	apiKey string, timeout int, flushTime int, ch chan *commons.MetricData, incChan chan *commons.MetricData) error {
-	conveyor, err := conveyor.NewConveyor(
-		ctx,
-		url,
-		apiKey,
-		time.Duration(timeout)*time.Second,
-	)
-
-	if err != nil {
-		return err
-	}
-
-	go conveyor.RunTransportRoutine(ch, incChan)
-	go conveyor.RunMetricsRoutine(time.Duration(flushTime) * time.Millisecond)
-	return nil
-}
-
+//Increment performs an increment operation
 func (gc *GraphiteClient) Increment(location string, value float64) {
 
 	metricPoint := commons.CreatePoint(
@@ -105,9 +91,10 @@ func (gc *GraphiteClient) Increment(location string, value float64) {
 		1, commons.Counter, value,
 		time.Now().Unix(),
 	)
-	gc.conveyorChannel <- metricPoint
+	gc.incrementsChannel <- metricPoint
 }
 
+//Gauge performs a gauge operation
 func (gc *GraphiteClient) Gauge(location string, value float64) {
 
 	metricPoint := commons.CreatePoint(

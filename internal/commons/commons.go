@@ -1,9 +1,28 @@
 package commons
 
 import (
+	"context"
 	"net/http"
 	"net/url"
+	"time"
 )
+
+func RunPoller(ctx context.Context, interval time.Duration, pFunc func(), pFunc1 func()) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case <-t.C:
+			go pFunc()
+			go pFunc1()
+		}
+
+	}
+}
 
 func GetDefaultRequest(grafanaUrl string, apiKey string) (*http.Request, error) {
 	url, err := url.Parse(grafanaUrl)
